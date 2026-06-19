@@ -257,7 +257,7 @@ tfoot td{padding:9px 10px;font-size:11px;font-weight:700;}
     <p>Silakan masuk untuk melanjutkan</p>
     <div class="fld">
       <label>Username</label>
-      <input type="text" id="lu" placeholder="username" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+      <input type="text" id="lu" placeholder="username" value="admin1" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
       <label>Password</label>
       <div style="position:relative;">
         <input type="password" id="lp" placeholder="password" autocomplete="new-password" style="width:100%;padding:11px 44px 11px 14px;border:2px solid #e2e8f0;border-radius:10px;font-size:15px;font-family:inherit;outline:none;margin-bottom:14px;">
@@ -907,35 +907,149 @@ function rendTbl(){
 }
 
 // === EXPORT CSV ===
+// === EXCEL EXPORT (pure JS, no library) ===
+function makeXlsx(sheets){
+  // Build a proper .xlsx file using OpenXML format
+  // sheets = [{name, rows: [[cell,...],...]}]
+  function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+  var sharedStrings=[];
+  var strMap={};
+  function si(s){s=String(s||'');if(strMap[s]===undefined){strMap[s]=sharedStrings.length;sharedStrings.push(s);}return strMap[s];}
+
+  function colName(n){var s='';n++;while(n>0){s=String.fromCharCode(64+(n%26||26))+s;n=Math.floor((n-(n%26||26))/26+(n%26?0:-1));}return s;}
+
+  var worksheets=sheets.map(function(sh,si2){
+    var rows=sh.rows.map(function(row,r){
+      var cells=row.map(function(val,c){
+        var addr=colName(c)+(r+1);
+        if(typeof val==='number'){
+          return '<c r="'+addr+'" t="n"><v>'+val+'</v></c>';
+        } else {
+          var idx=si(val);
+          return '<c r="'+addr+'" t="s"><v>'+idx+'</v></c>';
+        }
+      }).join('');
+      return '<row r="'+(r+1)+'">'+cells+'</row>';
+    }).join('');
+    return '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'+rows+'</sheetData></worksheet>';
+  });
+
+  var ssXml='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="'+sharedStrings.length+'" uniqueCount="'+sharedStrings.length+'">'+
+    sharedStrings.map(function(s){return '<si><t xml:space="preserve">'+esc(s)+'</t></si>';}).join('')+'</sst>';
+
+  var wbXml='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'+
+    sheets.map(function(sh,i){return '<sheet name="'+esc(sh.name)+'" sheetId="'+(i+1)+'" r:id="rId'+(i+2)+'"/>';}).join('')+'</sheets></workbook>';
+
+  var wbRels='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>'+
+    sheets.map(function(sh,i){return '<Relationship Id="rId'+(i+2)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>';}).join('')+
+    '</Relationships>';
+
+  var contentTypes='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'+
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'+
+    '<Default Extension="xml" ContentType="application/xml"/>'+
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'+
+    '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'+
+    sheets.map(function(sh,i){return '<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';}).join('')+
+    '</Types>';
+
+  var relsRoot='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+
+  // Build zip using simple zip algorithm
+  function str2ab(str){
+    var buf=new Uint8Array(str.length);
+    for(var i=0;i<str.length;i++)buf[i]=str.charCodeAt(i)&0xff;
+    return buf;
+  }
+  function crc32(buf){
+    var table=[];for(var i=0;i<256;i++){var c=i;for(var j=0;j<8;j++)c=c&1?0xedb88320^(c>>>1):c>>>1;table[i]=c;}
+    var crc=0xffffffff;
+    for(var k=0;k<buf.length;k++)crc=table[(crc^buf[k])&0xff]^(crc>>>8);
+    return (crc^0xffffffff)>>>0;
+  }
+  function u32(n){return [n&0xff,(n>>8)&0xff,(n>>16)&0xff,(n>>24)&0xff];}
+  function u16(n){return [n&0xff,(n>>8)&0xff];}
+
+  var files=[
+    {name:'[Content_Types].xml',data:contentTypes},
+    {name:'_rels/.rels',data:relsRoot},
+    {name:'xl/workbook.xml',data:wbXml},
+    {name:'xl/_rels/workbook.xml.rels',data:wbRels},
+    {name:'xl/sharedStrings.xml',data:ssXml},
+  ];
+  worksheets.forEach(function(ws,i){files.push({name:'xl/worksheets/sheet'+(i+1)+'.xml',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+ws});});
+
+  var zip=[];var offsets=[];var totalOffset=0;
+  files.forEach(function(f){
+    var nameBytes=str2ab(f.name);
+    var dataBytes=str2ab(f.data);
+    var crc=crc32(dataBytes);
+    var local=[0x50,0x4b,0x03,0x04,0x14,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00]
+      .concat(u32(crc)).concat(u32(dataBytes.length)).concat(u32(dataBytes.length))
+      .concat(u16(nameBytes.length)).concat(u16(0));
+    offsets.push({offset:totalOffset,nameBytes:nameBytes,crc:crc,size:dataBytes.length});
+    var entry=local.concat(Array.from(nameBytes)).concat(Array.from(dataBytes));
+    zip=zip.concat(entry);
+    totalOffset+=entry.length;
+  });
+
+  var cdOffset=totalOffset;
+  files.forEach(function(f,i){
+    var o=offsets[i];
+    var cd=[0x50,0x4b,0x01,0x02,0x14,0x00,0x14,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00]
+      .concat(u32(o.crc)).concat(u32(o.size)).concat(u32(o.size))
+      .concat(u16(o.nameBytes.length)).concat(u16(0)).concat(u16(0)).concat(u16(0)).concat(u16(0))
+      .concat(u32(0)).concat(u32(o.offset)).concat(Array.from(o.nameBytes));
+    zip=zip.concat(cd);
+  });
+
+  var cdSize=zip.length-cdOffset;
+  var eocd=[0x50,0x4b,0x05,0x06,0x00,0x00,0x00,0x00]
+    .concat(u16(files.length)).concat(u16(files.length))
+    .concat(u32(cdSize)).concat(u32(cdOffset)).concat(u16(0));
+  zip=zip.concat(eocd);
+
+  var b64='';var bytes=new Uint8Array(zip);
+  var chunk=8192;
+  for(var i=0;i<bytes.length;i+=chunk){b64+=String.fromCharCode.apply(null,bytes.subarray(i,i+chunk));}
+  return btoa(b64);
+}
+
 function exXls(){
   if(!data.length&&!ret.length){toast('Tidak ada data');return;}
   var tgl=new Date().toLocaleDateString('id').replace(/\//g,'-');
-  var html='<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body>';
-  html+='<table border="1">';
-  html+='<tr style="background:#1e293b;color:white;font-weight:bold;"><td>No</td><td>Nama</td><td>Tanggal</td><td>Barang</td><td>Qty</td><td>Harga (Rp)</td><td>Total (Rp)</td><td>Keterangan</td><td>Jenis</td></tr>';
-  data.forEach(function(d,i){
-    html+='<tr><td>'+(i+1)+'</td><td>'+d.nama+'</td><td>'+d.tanggal+'</td><td>'+LBL[d.barang]+'</td><td>'+d.qty+'</td><td>'+(d.harga||0)+'</td><td>'+(d.total||0)+'</td><td>'+(d.ket||'')+'</td><td>Pemakaian</td></tr>';
-  });
-  html+='<tr style="font-weight:bold;"><td></td><td></td><td></td><td>TOTAL PEMAKAIAN</td><td></td><td></td><td>'+data.reduce(function(s,d){return s+(d.total||0);},0)+'</td><td></td><td></td></tr>';
-  html+='<tr><td colspan="9"></td></tr>';
-  html+='<tr style="background:#059669;color:white;font-weight:bold;"><td>No</td><td>Nama</td><td>Tanggal</td><td>Barang</td><td>Qty</td><td>Harga (Rp)</td><td>Total Kembali (Rp)</td><td>Keterangan</td><td>Jenis</td></tr>';
-  ret.forEach(function(d,i){
-    html+='<tr><td>'+(i+1)+'</td><td>'+d.nama+'</td><td>'+d.tanggal+'</td><td>'+LBL[d.barang]+'</td><td>'+d.qty+'</td><td>'+(d.harga||0)+'</td><td>'+(d.total||0)+'</td><td>'+(d.ket||'')+'</td><td>Pengembalian</td></tr>';
-  });
+  var hdr=['No','Nama','Tanggal','Barang','Qty','Harga (Rp)','Total (Rp)','Keterangan','Jenis'];
+  var rows1=[hdr];
+  data.forEach(function(d,i){rows1.push([i+1,d.nama,d.tanggal,LBL[d.barang],d.qty,d.harga||0,d.total||0,d.ket||'','Pemakaian']);});
+  rows1.push(['','','','TOTAL PEMAKAIAN','','',data.reduce(function(s,d){return s+(d.total||0);},0),'','']);
+  rows1.push(['','','','','','','','','']);
+  rows1.push(['No','Nama','Tanggal','Barang','Qty','Harga (Rp)','Total Kembali (Rp)','Keterangan','Jenis']);
+  ret.forEach(function(d,i){rows1.push([i+1,d.nama,d.tanggal,LBL[d.barang],d.qty,d.harga||0,d.total||0,d.ket||'','Pengembalian']);});
   var tK=data.reduce(function(s,d){return s+(d.total||0);},0);
   var tR=ret.reduce(function(s,d){return s+(d.total||0);},0);
-  if(ret.length)html+='<tr style="font-weight:bold;"><td></td><td></td><td></td><td>TOTAL KEMBALI</td><td></td><td></td><td>'+tR+'</td><td></td><td></td></tr>';
-  html+='<tr><td colspan="9"></td></tr>';
-  html+='<tr style="font-weight:bold;background:#fef3c7;"><td></td><td></td><td></td><td>NET BIAYA</td><td></td><td></td><td>'+Math.max(0,tK-tR)+'</td><td></td><td></td></tr>';
-  html+='</table></body></html>';
-  // Use data URI - compatible with all browsers
-  var uri='data:application/vnd.ms-excel;charset=utf-8,'+encodeURIComponent(html);
-  var a=document.createElement('a');
-  a.href=uri;
-  a.download='ATK_'+tgl+'.xls';
-  document.body.appendChild(a);a.click();
-  setTimeout(function(){document.body.removeChild(a);},100);
-  toast('Excel diunduh!');
+  if(ret.length)rows1.push(['','','','TOTAL KEMBALI','','',tR,'','']);
+  rows1.push(['','','','NET BIAYA','','',Math.max(0,tK-tR),'','']);
+
+  var byK={};
+  data.forEach(function(d){if(!byK[d.nama])byK[d.nama]={p:0,s:0,g:0,k:0,r:0};byK[d.nama][d.barang[0]]+=(d.qty||0);byK[d.nama].k+=(d.total||0);});
+  ret.forEach(function(d){if(!byK[d.nama])byK[d.nama]={p:0,s:0,g:0,k:0,r:0};byK[d.nama].r+=(d.total||0);});
+  var rows2=[['Nama','Pulpen Keluar','Spidol Keluar','Gunting Keluar','Total Keluar (Rp)','Total Kembali (Rp)','Net Biaya (Rp)']];
+  var gp=0,gs=0,gg=0,gk=0,gr=0;
+  Object.keys(byK).sort().forEach(function(n){var v=byK[n];var net=Math.max(0,v.k-v.r);rows2.push([n,v.p||0,v.s||0,v.g||0,v.k||0,v.r||0,net]);gp+=v.p||0;gs+=v.s||0;gg+=v.g||0;gk+=v.k||0;gr+=v.r||0;});
+  rows2.push(['TOTAL',gp,gs,gg,gk,gr,Math.max(0,gk-gr)]);
+
+  try{
+    var b64=makeXlsx([{name:'Pemakaian & Pengembalian',rows:rows1},{name:'Net Per Karyawan',rows:rows2}]);
+    var a=document.createElement('a');
+    a.href='data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,'+b64;
+    a.download='ATK_'+tgl+'.xlsx';
+    document.body.appendChild(a);a.click();
+    setTimeout(function(){document.body.removeChild(a);},100);
+    toast('Excel diunduh!');
+  }catch(e){
+    console.error(e);toast('Error: '+e.message);
+  }
 }
 function exCsv(){exXls();}
 
@@ -1045,26 +1159,51 @@ function rendRekTbl(m,rows,c){
 }
 function exXlsRekap(){
   var rows=getFilData();
-  if(!rows.length){toast('Tidak ada data');return;}
+  if(!rows.length&&!ret.length){toast('Tidak ada data');return;}
   var tgl=new Date().toLocaleDateString('id').replace(/\//g,'-');
-  var mode=sv('rmode').value;
-  var title=mode==='karyawan'?'Per Karyawan':mode==='harian'?'Per Hari':mode==='bulanan'?'Per Bulan':'Per Tahun';
-  var html='<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body>';
-  html+='<h3>Rekap ATK - '+title+'</h3>';
-  html+='<table border="1">';
-  html+='<tr style="background:#1e293b;color:white;font-weight:bold;"><td>No</td><td>Nama</td><td>Tanggal</td><td>Barang</td><td>Qty</td><td>Harga (Rp)</td><td>Total (Rp)</td><td>Keterangan</td></tr>';
-  rows.forEach(function(d,i){
-    html+='<tr><td>'+(i+1)+'</td><td>'+d.nama+'</td><td>'+d.tanggal+'</td><td>'+LBL[d.barang]+'</td><td>'+d.qty+'</td><td>'+(d.harga||0)+'</td><td>'+(d.total||0)+'</td><td>'+(d.ket||'')+'</td></tr>';
+
+  // Sheet 1: Pemakaian
+  var s1=[['No','Nama','Tanggal','Barang','Qty','Harga (Rp)','Total (Rp)','Keterangan','Jenis']];
+  rows.forEach(function(d,i){s1.push([i+1,d.nama,d.tanggal,LBL[d.barang],d.qty,d.harga||0,d.total||0,d.ket||'','Pemakaian']);});
+  s1.push(['','','','TOTAL PEMAKAIAN','','',rows.reduce(function(s,d){return s+(d.total||0);},0),'','']);
+  s1.push(['','','','','','','','','']);
+
+  // Filter pengembalian sesuai filter karyawan & barang yg aktif
+  var fn=sv('rfnm').value,fb=sv('rfbr').value;
+  var retRows=ret.filter(function(d){
+    if(fn&&d.nama!==fn)return false;
+    if(fb&&d.barang!==fb)return false;
+    return true;
   });
-  html+='<tr style="font-weight:bold;background:#fef3c7;"><td colspan="6">TOTAL</td><td>'+rows.reduce(function(s,d){return s+(d.total||0);},0)+'</td><td></td></tr>';
-  html+='</table></body></html>';
-  var uri='data:application/vnd.ms-excel;charset=utf-8,'+encodeURIComponent(html);
-  var a=document.createElement('a');
-  a.href=uri;
-  a.download='Rekap_ATK_'+tgl+'.xls';
-  document.body.appendChild(a);a.click();
-  setTimeout(function(){document.body.removeChild(a);},100);
-  toast('Excel Rekap diunduh!');
+  s1.push(['No','Nama','Tanggal','Barang','Qty','Harga (Rp)','Total Kembali (Rp)','Keterangan','Jenis']);
+  retRows.forEach(function(d,i){s1.push([i+1,d.nama,d.tanggal,LBL[d.barang],d.qty,d.harga||0,d.total||0,d.ket||'','Pengembalian']);});
+  var tK=rows.reduce(function(s,d){return s+(d.total||0);},0);
+  var tR=retRows.reduce(function(s,d){return s+(d.total||0);},0);
+  if(retRows.length)s1.push(['','','','TOTAL KEMBALI','','',tR,'','']);
+  s1.push(['','','','NET BIAYA','','',Math.max(0,tK-tR),'','']);
+
+  // Sheet 2: Summary per karyawan
+  var byK={};
+  rows.forEach(function(d){if(!byK[d.nama])byK[d.nama]={p:0,s:0,g:0,k:0,r:0};byK[d.nama][d.barang[0]]+=(d.qty||0);byK[d.nama].k+=(d.total||0);});
+  retRows.forEach(function(d){if(!byK[d.nama])byK[d.nama]={p:0,s:0,g:0,k:0,r:0};byK[d.nama].r+=(d.total||0);});
+  var s2=[['Nama','Pulpen','Spidol','Gunting','Total Keluar (Rp)','Total Kembali (Rp)','Net Biaya (Rp)']];
+  var gp=0,gs=0,gg=0,gk=0,gr=0;
+  Object.keys(byK).sort().forEach(function(n){
+    var v=byK[n];var net=Math.max(0,v.k-v.r);
+    s2.push([n,v.p||0,v.s||0,v.g||0,v.k||0,v.r||0,net]);
+    gp+=v.p||0;gs+=v.s||0;gg+=v.g||0;gk+=v.k||0;gr+=v.r||0;
+  });
+  s2.push(['TOTAL',gp,gs,gg,gk,gr,Math.max(0,gk-gr)]);
+
+  try{
+    var b64=makeXlsx([{name:'Pemakaian & Pengembalian',rows:s1},{name:'Summary',rows:s2}]);
+    var a=document.createElement('a');
+    a.href='data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,'+b64;
+    a.download='Rekap_ATK_'+tgl+'.xlsx';
+    document.body.appendChild(a);a.click();
+    setTimeout(function(){document.body.removeChild(a);},100);
+    toast('Excel Rekap diunduh!');
+  }catch(e){toast('Error: '+e.message);}
 }
 
 // === USER MANAGEMENT ===
