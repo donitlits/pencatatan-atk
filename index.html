@@ -400,7 +400,7 @@ tfoot td{padding:9px 10px;font-size:11px;font-weight:700;}
         <div class="sec-hdr">
           <div class="sec-ttl">Riwayat Pemakaian</div>
           <div class="bts">
-            <button class="bt-sm g" onclick="exCsv()">↓ CSV</button>
+            <button class="bt-sm g" onclick="exXls()">↓ Excel</button>
             <button class="bt-sm" onclick="window.print()">Cetak</button>
           </div>
         </div>
@@ -458,7 +458,7 @@ tfoot td{padding:9px 10px;font-size:11px;font-weight:700;}
           </select>
         </div>
       </div>
-      <button class="btxl" onclick="exXlsRekap()">Export CSV Rekap</button>
+      <button class="btxl" onclick="exXlsRekap()">↓ Export Excel Rekap</button>
     </div>
     <div class="sumrow" id="rsum"></div>
     <div class="period" id="rper"></div>
@@ -907,17 +907,37 @@ function rendTbl(){
 }
 
 // === EXPORT CSV ===
-function exCsv(){
+function exXls(){
   if(!data.length&&!ret.length){toast('Tidak ada data');return;}
-  var rows=['No,Nama,Tanggal,Barang,Qty,Harga,Total,Keterangan,Jenis'];
-  data.forEach(function(d,i){rows.push([i+1,d.nama,d.tanggal,LBL[d.barang],d.qty,d.harga||0,d.total||0,d.ket||'','Pemakaian'].join(','));});
-  ret.forEach(function(d,i){rows.push([i+1,d.nama,d.tanggal,LBL[d.barang],d.qty,d.harga||0,d.total||0,d.ket||'','Pengembalian'].join(','));});
-  var blob=new Blob(['\uFEFF'+rows.join('\n')],{type:'text/csv;charset=utf-8;'});
-  var a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download='ATK_'+new Date().toLocaleDateString('id').replace(/\//g,'-')+'.csv';
-  document.body.appendChild(a);a.click();document.body.removeChild(a);
-  toast('CSV diunduh');
+  var tgl=new Date().toLocaleDateString('id').replace(/\//g,'-');
+  var html='<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body>';
+  html+='<table border="1">';
+  html+='<tr style="background:#1e293b;color:white;font-weight:bold;"><td>No</td><td>Nama</td><td>Tanggal</td><td>Barang</td><td>Qty</td><td>Harga (Rp)</td><td>Total (Rp)</td><td>Keterangan</td><td>Jenis</td></tr>';
+  data.forEach(function(d,i){
+    html+='<tr><td>'+(i+1)+'</td><td>'+d.nama+'</td><td>'+d.tanggal+'</td><td>'+LBL[d.barang]+'</td><td>'+d.qty+'</td><td>'+(d.harga||0)+'</td><td>'+(d.total||0)+'</td><td>'+(d.ket||'')+'</td><td>Pemakaian</td></tr>';
+  });
+  html+='<tr style="font-weight:bold;"><td></td><td></td><td></td><td>TOTAL PEMAKAIAN</td><td></td><td></td><td>'+data.reduce(function(s,d){return s+(d.total||0);},0)+'</td><td></td><td></td></tr>';
+  html+='<tr><td colspan="9"></td></tr>';
+  html+='<tr style="background:#059669;color:white;font-weight:bold;"><td>No</td><td>Nama</td><td>Tanggal</td><td>Barang</td><td>Qty</td><td>Harga (Rp)</td><td>Total Kembali (Rp)</td><td>Keterangan</td><td>Jenis</td></tr>';
+  ret.forEach(function(d,i){
+    html+='<tr><td>'+(i+1)+'</td><td>'+d.nama+'</td><td>'+d.tanggal+'</td><td>'+LBL[d.barang]+'</td><td>'+d.qty+'</td><td>'+(d.harga||0)+'</td><td>'+(d.total||0)+'</td><td>'+(d.ket||'')+'</td><td>Pengembalian</td></tr>';
+  });
+  var tK=data.reduce(function(s,d){return s+(d.total||0);},0);
+  var tR=ret.reduce(function(s,d){return s+(d.total||0);},0);
+  if(ret.length)html+='<tr style="font-weight:bold;"><td></td><td></td><td></td><td>TOTAL KEMBALI</td><td></td><td></td><td>'+tR+'</td><td></td><td></td></tr>';
+  html+='<tr><td colspan="9"></td></tr>';
+  html+='<tr style="font-weight:bold;background:#fef3c7;"><td></td><td></td><td></td><td>NET BIAYA</td><td></td><td></td><td>'+Math.max(0,tK-tR)+'</td><td></td><td></td></tr>';
+  html+='</table></body></html>';
+  // Use data URI - compatible with all browsers
+  var uri='data:application/vnd.ms-excel;charset=utf-8,'+encodeURIComponent(html);
+  var a=document.createElement('a');
+  a.href=uri;
+  a.download='ATK_'+tgl+'.xls';
+  document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a);},100);
+  toast('Excel diunduh!');
 }
+function exCsv(){exXls();}
 
 // === REKAP ===
 function onMode(){
@@ -1026,13 +1046,25 @@ function rendRekTbl(m,rows,c){
 function exXlsRekap(){
   var rows=getFilData();
   if(!rows.length){toast('Tidak ada data');return;}
-  var lines=['Nama,Tanggal,Barang,Qty,Harga,Total,Keterangan'];
-  rows.forEach(function(d){lines.push([d.nama,d.tanggal,LBL[d.barang],d.qty,d.harga||0,d.total||0,d.ket||''].join(','));});
-  var blob=new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8;'});
-  var a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download='Rekap_ATK_'+new Date().toLocaleDateString('id').replace(/\//g,'-')+'.csv';
-  document.body.appendChild(a);a.click();document.body.removeChild(a);
-  toast('CSV diunduh');
+  var tgl=new Date().toLocaleDateString('id').replace(/\//g,'-');
+  var mode=sv('rmode').value;
+  var title=mode==='karyawan'?'Per Karyawan':mode==='harian'?'Per Hari':mode==='bulanan'?'Per Bulan':'Per Tahun';
+  var html='<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body>';
+  html+='<h3>Rekap ATK - '+title+'</h3>';
+  html+='<table border="1">';
+  html+='<tr style="background:#1e293b;color:white;font-weight:bold;"><td>No</td><td>Nama</td><td>Tanggal</td><td>Barang</td><td>Qty</td><td>Harga (Rp)</td><td>Total (Rp)</td><td>Keterangan</td></tr>';
+  rows.forEach(function(d,i){
+    html+='<tr><td>'+(i+1)+'</td><td>'+d.nama+'</td><td>'+d.tanggal+'</td><td>'+LBL[d.barang]+'</td><td>'+d.qty+'</td><td>'+(d.harga||0)+'</td><td>'+(d.total||0)+'</td><td>'+(d.ket||'')+'</td></tr>';
+  });
+  html+='<tr style="font-weight:bold;background:#fef3c7;"><td colspan="6">TOTAL</td><td>'+rows.reduce(function(s,d){return s+(d.total||0);},0)+'</td><td></td></tr>';
+  html+='</table></body></html>';
+  var uri='data:application/vnd.ms-excel;charset=utf-8,'+encodeURIComponent(html);
+  var a=document.createElement('a');
+  a.href=uri;
+  a.download='Rekap_ATK_'+tgl+'.xls';
+  document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a);},100);
+  toast('Excel Rekap diunduh!');
 }
 
 // === USER MANAGEMENT ===
